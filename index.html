@@ -555,11 +555,11 @@ main {
       <!-- INVOICE HARI INI -->
       <div class="section-card">
         <div class="section-title">
-          <h2>✅ Invoice Hari Ini</h2>
+          <h2>✅ Selesai Hari Ini</h2>
           <span class="badge-count" id="countDone">0 Unit</span>
         </div>
         <div class="done-list" id="doneList">
-          <div class="empty-state">Belum ada unit invoice hari ini</div>
+          <div class="empty-state">Belum ada unit selesai hari ini</div>
         </div>
       </div>
     </div>
@@ -872,7 +872,7 @@ function render() {
         <div class="stall-card busy">
           <div class="stall-header">
             <span class="stall-name">${esc(stallName)}</span>
-            <span class="stall-status status-busy">Create SCL</span>
+            <span class="stall-status status-busy">Sedang Dikerjakan</span>
           </div>
           <div class="stall-body">
             <div class="q-num">${esc(activeRec.no_antrian)}</div>
@@ -885,7 +885,7 @@ function render() {
             </div>
           </div>
           <div class="stall-footer">
-            <span class="label">Durasi Create SCL</span>
+            <span class="label">Durasi Dikerjakan</span>
             <span class="timer live-timer" data-start="${activeRec.mulai}">${dur(mins(activeRec.mulai))}</span>
           </div>
         </div>
@@ -940,7 +940,7 @@ function render() {
   $("#countDone").textContent = doneRecs.length + " Unit";
 
   if (doneRecs.length === 0) {
-    $("#doneList").innerHTML = '<div class="empty-state">Belum ada unit invoice hari ini</div>';
+    $("#doneList").innerHTML = '<div class="empty-state">Belum ada unit selesai hari ini</div>';
   } else {
     $("#doneList").innerHTML = doneRecs.map(r => `
       <div class="done-item">
@@ -951,7 +951,7 @@ function render() {
             <span>${esc(r.layanan || "Service")}</span>
           </div>
         </div>
-        <div class="done-time">Invoice ${hm(r.selesai)}</div>
+        <div class="done-time">Selesai ${hm(r.selesai)}</div>
       </div>
     `).join("");
   }
