@@ -527,6 +527,7 @@ main {
     
     <div class="controls">
       <div class="clk" id="clk">--:--:--</div>
+      <button class="btn-icon" onclick="testAudioAnnouncement()" id="btnTestVoice" title="Klik untuk menguji nada dan suara cewek pengumuman">🔔 Test Suara</button>
       <button class="btn-icon" onclick="toggleAudio()" id="btnAudio" title="Nyalakan/Matikan Audio">🔊 Suara</button>
       <button class="btn-icon" onclick="toggleFullscreen()" title="Layar Penuh (F11)">⛶ Layar Penuh</button>
     </div>
@@ -605,13 +606,13 @@ function getScriptUrl() {
 const urlParams = new URLSearchParams(window.location.search);
 const querySite = (urlParams.get("site") || urlParams.get("cabang") || "").toUpperCase();
 
-// Daftar cabang awal (tersimpan di storage atau default)
+// Daftar cabang awal
 let sites = JSON.parse(localStorage.getItem("sq_sites") || '["CDG"]');
 let siteStalls = JSON.parse(localStorage.getItem("sq_site_stalls") || '{"CDG":2}');
 
 // Logika penentuan cabang TV:
 // 1. Dari URL parameter (?site=CDG / ?cabang=CDG)
-// 2. Dari localStorage 'sq_tv_site' (ingat pilihan cabang TV ini sebelumnya)
+// 2. Dari localStorage 'sq_tv_site'
 // 3. Fallback ke cabang pertama di daftar cabang
 let activeSite = querySite || localStorage.getItem("sq_tv_site") || (sites[0] || "CDG").toUpperCase();
 
@@ -619,20 +620,47 @@ let activeSite = querySite || localStorage.getItem("sq_tv_site") || (sites[0] ||
 localStorage.setItem("sq_tv_site", activeSite);
 
 let audioEnabled = true;
-let prevWorkingIds = new Set();
 let isPulling = false;
 
-/* Helpers */
+/* ================= HELPER FUNGSI ================= */
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const maskPlate = p => { p = String(p || "").trim(); return p.length > 5 ? p.slice(0, 3) + "***" + p.slice(-2) : p; };
 const today = () => { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10); };
 const hm = t => t ? new Date(t).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) : "-";
 const p2 = n => String(n).padStart(2, "0");
 const dur = s => s == null ? "-" : (s >= 3600 ? Math.floor(s / 3600) + ":" : "") + p2(Math.floor(s % 3600 / 60)) + ":" + p2(s % 60);
 const mins = (a, b) => a ? Math.max(0, Math.round(((b ? new Date(b) : new Date()) - new Date(a)) / 1e3)) : null;
 
-/* Local Records Cache: dimuat awal agar layar TV langsung tampil tanpa delay */
+/* ================= SENSOR / MASKING SEBAGIAN NO PLAT MOTOR ================= */
+// Mengaburkan digit tengah plat nomor untuk privasi di layar TV (Contoh: B 12** XYZ, D 4** EF, AD 1* C)
+function maskPlate(p) {
+  if (!p) return "-";
+  const raw = String(p).trim().toUpperCase();
+  const m = raw.match(/^([A-Z]{1,2})\s*([0-9]{1,4})\s*([A-Z]{0,3})$/);
+  if (m) {
+    const prefix = m[1];
+    const num = m[2];
+    const suffix = m[3] ? " " + m[3] : "";
+    let maskedNum = num;
+    if (num.length >= 4) {
+      maskedNum = num.slice(0, 2) + "**";
+    } else if (num.length === 3) {
+      maskedNum = num.slice(0, 1) + "**";
+    } else if (num.length === 2) {
+      maskedNum = num.slice(0, 1) + "*";
+    } else {
+      maskedNum = "*";
+    }
+    return `${prefix} ${maskedNum}${suffix}`;
+  }
+  // Format jika nomor plat panjang atau non-standar
+  if (raw.length > 5) {
+    return raw.slice(0, 3) + "***" + raw.slice(-2);
+  }
+  return raw;
+}
+
+/* Local Records Cache: dimuat awal agar layar TV langsung tampil tanpa jeda */
 let records = JSON.parse(localStorage.getItem("sq_recs") || "[]");
 
 /* Update Tampilan Badge Cabang */
@@ -672,38 +700,323 @@ function selectSite(s) {
   u.searchParams.set("site", activeSite);
   try { window.history.replaceState({}, "", u); } catch(e) {}
   
+  // Reset pelacak status cabang sebelumnya agar tidak membunyikan data lama cabang baru
+  prevRecordsState.clear();
+  isFirstInit = true;
+
   updateSiteBadgeUI();
   closeSiteModal();
   render();
   fetchData();
 }
 
-/* Audio Chime Web Audio API */
+/* ================= AUDIO & SUARA PENGUMUMAN TV (NADA MELODI + SUARA CEWEK) ================= */
 let audioCtx = null;
-function playChime() {
-  if (!audioEnabled) return;
+
+// Membuka kunci AudioContext & Web Speech pada Android TV / Chrome
+function unlockAudio() {
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(587.33, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.15);
-    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.6);
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.start();
-    osc.stop(audioCtx.currentTime + 0.65);
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.resume();
+      const dummy = new SpeechSynthesisUtterance("");
+      window.speechSynthesis.speak(dummy);
+    }
   } catch(e) {}
 }
 
-// Inisialisasi audio saat TV disentuh/diklik pertama kali
-document.addEventListener("click", () => {
-  if (!audioCtx) {
-    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+["click", "keydown", "touchstart", "pointerdown"].forEach(evt => {
+  document.addEventListener(evt, unlockAudio, { once: true });
+});
+
+// Preload daftar voice ketika tersedia di browser
+if ("speechSynthesis" in window) {
+  window.speechSynthesis.onvoiceschanged = () => {
+    getFemaleIndonesianVoice();
+  };
+}
+
+// 1. NADA CHIME MELODI (Web Audio API)
+// Menghasilkan alunan melodi 3 tangga nada (E5 -> G#5 -> B5) merdu dan lembut layaknya pengumuman bandara
+function playChimeMelody() {
+  return new Promise(resolve => {
+    if (!audioEnabled) return resolve();
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+
+      const now = audioCtx.currentTime;
+      const notes = [
+        { freq: 659.25, start: 0.00, dur: 0.22 }, // E5
+        { freq: 830.61, start: 0.20, dur: 0.22 }, // G#5
+        { freq: 987.77, start: 0.40, dur: 0.55 }  // B5
+      ];
+
+      notes.forEach(n => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(n.freq, now + n.start);
+
+        // Serangan nada lembut (attack) dan memudar perlahan (exponential decay)
+        gain.gain.setValueAtTime(0.0001, now + n.start);
+        gain.gain.exponentialRampToValueAtTime(0.25, now + n.start + 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + n.start + n.dur);
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now + n.start);
+        osc.stop(now + n.start + n.dur + 0.05);
+      });
+
+      setTimeout(resolve, 1050);
+    } catch(e) {
+      console.warn("Chime error:", e);
+      resolve();
+    }
+  });
+}
+
+// 2. SUARA CEWEK BAHASA INDONESIA (Web Speech API)
+function getFemaleIndonesianVoice() {
+  if (!("speechSynthesis" in window)) return null;
+  const voices = window.speechSynthesis.getVoices() || [];
+  if (voices.length === 0) return null;
+
+  // Prioritas 1: Suara bahasa Indonesia dengan karakteristik cewek / wanita
+  const idVoices = voices.filter(v => (v.lang || "").toLowerCase().includes("id"));
+  const femaleId = idVoices.find(v => {
+    const n = (v.name || "").toLowerCase();
+    return n.includes("female") || n.includes("wanita") || n.includes("gadis") ||
+           n.includes("siti") || n.includes("ayu") || n.includes("wulan") || n.includes("indonesia") || n.includes("google");
+  });
+  if (femaleId) return femaleId;
+  if (idVoices.length > 0) return idVoices[0];
+
+  // Prioritas 2: Female voice internasional
+  const anyFemale = voices.find(v => (v.name || "").toLowerCase().includes("female"));
+  if (anyFemale) return anyFemale;
+
+  return voices[0];
+}
+
+function speakFemaleVoice(text) {
+  return new Promise(resolve => {
+    if (!audioEnabled || !("speechSynthesis" in window)) return resolve();
+    try {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = "id-ID";
+      const voice = getFemaleIndonesianVoice();
+      if (voice) utter.voice = voice;
+
+      // Setting karakter suara cewek: nada tinggi ramah (pitch 1.2), tempo pas (rate 0.92)
+      utter.pitch = 1.2;
+      utter.rate = 0.92;
+      utter.volume = 1.0;
+
+      let finished = false;
+      const done = () => {
+        if (!finished) {
+          finished = true;
+          resolve();
+        }
+      };
+
+      utter.onend = done;
+      utter.onerror = done;
+      setTimeout(done, 12000); // Batas aman jika event onend browser tidak tertrigger
+
+      window.speechSynthesis.speak(utter);
+    } catch(e) {
+      console.warn("TTS error:", e);
+      resolve();
+    }
+  });
+}
+
+// 3. ANNOUNCE QUEUE (Mencegah suara bertabrakan jika ada beberapa update bersamaan)
+const announceQueue = [];
+let isAnnouncing = false;
+
+function enqueueAnnouncement(item) {
+  if (!audioEnabled) return;
+  announceQueue.push(item);
+  processAnnounceQueue();
+}
+
+async function processAnnounceQueue() {
+  if (isAnnouncing || announceQueue.length === 0) return;
+  isAnnouncing = true;
+  const item = announceQueue.shift();
+  try {
+    // 1. Alunan nada melodi pembuka (chime)
+    await playChimeMelody();
+    // 2. Jeda hening 150ms
+    await new Promise(r => setTimeout(r, 150));
+    // 3. Suara cewek mengumumkan panggilan
+    await speakFemaleVoice(item.text);
+  } catch(e) {
+    console.warn(e);
+  } finally {
+    isAnnouncing = false;
+    // Jeda 600ms sebelum pengumuman berikutnya jika ada
+    if (announceQueue.length > 0) {
+      setTimeout(processAnnounceQueue, 600);
+    }
   }
-}, { once: true });
+}
+
+// 4. FORMAT PENGUCAPAN SUARA (Mengeja nomor antrian & plat motor agar terdengar jelas)
+function digitWord(d) {
+  const words = {
+    '0': 'kosong', '1': 'satu', '2': 'dua', '3': 'tiga', '4': 'empat',
+    '5': 'lima', '6': 'enam', '7': 'tujuh', '8': 'delapan', '9': 'sembilan'
+  };
+  return words[d] || d;
+}
+
+function formatQueueForSpeech(no) {
+  if (!no) return "";
+  const raw = String(no).trim().toUpperCase();
+  const res = [];
+  for (const ch of raw) {
+    if (ch === '0') res.push('kosong');
+    else if (ch >= '1' && ch <= '9') res.push(digitWord(ch));
+    else if (ch >= 'A' && ch <= 'Z') res.push(ch);
+  }
+  return res.join(" ");
+}
+
+function formatPlateForSpeech(plat) {
+  if (!plat) return "";
+  const raw = String(plat).trim().toUpperCase();
+  const parts = raw.split(/\s+/);
+  return parts.map(part => {
+    if (/^\d+$/.test(part)) {
+      return part.split("").map(digitWord).join(" ");
+    } else {
+      return part.split("").join(" ");
+    }
+  }).join(", ");
+}
+
+function formatStallForSpeech(stall) {
+  if (!stall) return "Stall satu";
+  const raw = String(stall).trim();
+  return raw.replace(/(\d+)/g, (m, n) => {
+    return " " + n.split("").map(digitWord).join(" ");
+  });
+}
+
+// 5. DETEKSI STATUS & ISOLASI CABANG KETAT (HANYA CABANG SAMA YANG BUNYI!)
+let prevRecordsState = new Map();
+let isFirstInit = true;
+const announcedKeys = new Map();
+
+function isWorkingStatus(st) {
+  return st === "Dikerjakan" || st === "Create SCL";
+}
+
+function isDoneStatus(st) {
+  return st === "Selesai" || st === "Invoice";
+}
+
+function announceStatus(r, actionType) {
+  // ATURAN MUTLAK: Cabang SA harus SAMA dengan Cabang TV ini!
+  const rSite = (r.site || "").toUpperCase();
+  const tvSite = (activeSite || "").toUpperCase();
+  if (rSite && tvSite && rSite !== tvSite) {
+    // Cabang berbeda: TV cabang ini TETAP DIAM (TIDAK BUNYI)!
+    return;
+  }
+
+  const dedupeKey = `${r.id}_${actionType}`;
+  const now = Date.now();
+  if (announcedKeys.has(dedupeKey) && (now - announcedKeys.get(dedupeKey) < 45000)) {
+    return; // Sudah diumumkan dalam 45 detik terakhir
+  }
+  announcedKeys.set(dedupeKey, now);
+
+  const speechNo = formatQueueForSpeech(r.no_antrian);
+  const speechPlat = formatPlateForSpeech(r.plat);
+  const speechStall = formatStallForSpeech(r.stall || "Stall 1");
+
+  let text = "";
+  if (actionType === "scl") {
+    // SA Klik "Create SCL" -> Masuk ke Stall
+    text = `Panggilan antrian, ${speechNo}. Plat nomor, ${speechPlat}. Silakan menuju ke ${speechStall}.`;
+  } else if (actionType === "invoice") {
+    // SA Klik "Invoice" -> Servis Selesai Menuju Kasir
+    text = `Panggilan antrian, ${speechNo}. Plat nomor, ${speechPlat}. Servis telah selesai, silakan menuju ke kasir. Terima kasih.`;
+  }
+
+  if (text) {
+    enqueueAnnouncement({ text, type: actionType, record: r });
+  }
+}
+
+function checkStatusTransitions(curRecs) {
+  const t = today();
+  // Filter HANYA untuk antrian cabang TV aktif hari ini
+  const relevantRecs = (curRecs || []).filter(r => 
+    (!r.site || r.site.toUpperCase() === activeSite.toUpperCase()) &&
+    r.tanggal === t
+  );
+
+  // Jika pertama kali halaman TV dimuat/refresh:
+  // Rekam semua data status yang ada ke memori tanpa membunyikan suara
+  if (isFirstInit) {
+    relevantRecs.forEach(r => {
+      prevRecordsState.set(r.id, { status: r.status, stall: r.stall, plat: r.plat, no_antrian: r.no_antrian });
+    });
+    isFirstInit = false;
+    return;
+  }
+
+  relevantRecs.forEach(r => {
+    const prev = prevRecordsState.get(r.id);
+    const curStatus = r.status;
+
+    if (!prev) {
+      // Record baru yang tiba-tiba muncul saat TV sedang beroperasi
+      if (isWorkingStatus(curStatus)) {
+        announceStatus(r, "scl");
+      } else if (isDoneStatus(curStatus)) {
+        announceStatus(r, "invoice");
+      }
+    } else {
+      // 1. SA klik "Create SCL" / Mulai Dikerjakan di Stall
+      if (!isWorkingStatus(prev.status) && isWorkingStatus(curStatus)) {
+        announceStatus(r, "scl");
+      }
+      // 2. SA klik "Invoice" / Selesai Servis
+      else if (!isDoneStatus(prev.status) && isDoneStatus(curStatus)) {
+        announceStatus(r, "invoice");
+      }
+    }
+
+    // Perbarui memori status
+    prevRecordsState.set(r.id, { status: curStatus, stall: r.stall, plat: r.plat, no_antrian: r.no_antrian });
+  });
+}
+
+// Tombol uji coba suara oleh teknisi/SA di layar TV
+function testAudioAnnouncement() {
+  unlockAudio();
+  const demoRec = {
+    site: activeSite,
+    no_antrian: "A001",
+    plat: "B 1234 XYZ",
+    stall: "Stall 1"
+  };
+  const speechNo = formatQueueForSpeech(demoRec.no_antrian);
+  const speechPlat = formatPlateForSpeech(demoRec.plat);
+  const speechStall = formatStallForSpeech(demoRec.stall);
+  const text = `Uji coba suara TV cabang ${activeSite}. Panggilan antrian, ${speechNo}. Plat nomor, ${speechPlat}. Silakan menuju ke ${speechStall}.`;
+  enqueueAnnouncement({ text, type: "test" });
+}
 
 function toggleAudio() {
   audioEnabled = !audioEnabled;
@@ -732,7 +1045,42 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') requestWakeLock();
 });
 
-/* ================= PROSES DATA DARI SERVER ================= */
+/* ================= KOMUNIKASI BROADCAST CHANNEL & STORAGE ================= */
+// Komunikasi instan antar tab jika SA & TV dites di browser/perangkat yang sama
+try {
+  if ('BroadcastChannel' in window) {
+    const tvBc = new BroadcastChannel("sq_tv_channel");
+    tvBc.onmessage = function(ev) {
+      const msg = ev.data;
+      if (!msg || msg.type !== "status_change") return;
+      // FILTER KETAT CABANG: Hanya jika cabang sama persis dengan TV ini!
+      if ((msg.site || "").toUpperCase() !== (activeSite || "").toUpperCase()) return;
+
+      if (isWorkingStatus(msg.status)) {
+        announceStatus(msg, "scl");
+      } else if (isDoneStatus(msg.status)) {
+        announceStatus(msg, "invoice");
+      }
+      render();
+    };
+  }
+} catch(e) {}
+
+// Listener Storage Event jika localStorage diubah oleh tab admin
+window.addEventListener("storage", ev => {
+  if (ev.key === "sq_recs" && ev.newValue) {
+    try {
+      const updated = JSON.parse(ev.newValue);
+      if (Array.isArray(updated)) {
+        records = updated;
+        render();
+        checkStatusTransitions(records);
+      }
+    } catch(e) {}
+  }
+});
+
+/* ================= PROSES DATA DARI SERVER GOOGLE SHEETS ================= */
 function applyMonitoringData(data) {
   if (!data || !data.ok) return;
 
@@ -742,9 +1090,8 @@ function applyMonitoringData(data) {
     localStorage.setItem("sq_sites", JSON.stringify(sites));
   }
 
-  // 2. Sinkronkan data records (difilter HANYA untuk cabang aktif TV ini)
+  // 2. Sinkronkan data records
   if (data.records && Array.isArray(data.records)) {
-    // Simpan semua ke cache lokal
     records = data.records;
     try {
       localStorage.setItem("sq_recs", JSON.stringify(records));
@@ -759,10 +1106,10 @@ function applyMonitoringData(data) {
 
   updateSiteBadgeUI();
   render();
-  checkNewWorking();
+  checkStatusTransitions(records);
 }
 
-/* ================= AMBIL DATA GOOGLE SHEETS ================= */
+/* ================= AMBIL DATA GOOGLE SHEETS (JSONP) ================= */
 function fetchData() {
   const SCRIPT_URL = getScriptUrl();
   if (!SCRIPT_URL) return;
@@ -770,7 +1117,6 @@ function fetchData() {
   isPulling = true;
 
   const cbName = "sq_tv_cb_" + Date.now() + "_" + Math.floor(Math.random() * 10000);
-  // Kirimkan parameter site ke Google Sheets agar hemat bandwidth
   const qUrl = SCRIPT_URL + (SCRIPT_URL.includes("?") ? "&" : "?") + 
                "callback=" + cbName + 
                (activeSite ? "&site=" + encodeURIComponent(activeSite) : "") + 
@@ -820,27 +1166,6 @@ function fetchData() {
   }, 15000);
 
   document.head.appendChild(script);
-}
-
-/* Bunyikan bel saat unit baru mulai dikerjakan di stall */
-function checkNewWorking() {
-  const t = today();
-  const currentWorking = records.filter(r => 
-    (!r.site || r.site.toUpperCase() === activeSite.toUpperCase()) &&
-    r.tanggal === t && 
-    (r.status === "Dikerjakan" || r.status === "Create SCL")
-  );
-  const currentIds = new Set(currentWorking.map(r => r.id));
-  
-  let hasNew = false;
-  currentIds.forEach(id => {
-    if (!prevWorkingIds.has(id)) hasNew = true;
-  });
-
-  if (hasNew && prevWorkingIds.size > 0) {
-    playChime();
-  }
-  prevWorkingIds = currentIds;
 }
 
 /* ================= RENDER MONITORING TV ================= */
@@ -977,14 +1302,14 @@ function tick() {
   });
 }
 
-// Inisialisasi
+// Inisialisasi awal
 updateSiteBadgeUI();
 render();
 fetchData();
 tick();
 
 setInterval(tick, 1000);
-setInterval(fetchData, 10000); // Polling otomatis tiap 10 detik
+setInterval(fetchData, 8000); // Polling otomatis tiap 8 detik
 </script>
 </body>
 </html>
