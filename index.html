@@ -519,15 +519,14 @@ main {
     <div class="brand-section">
       <div class="badge-live">Live TV</div>
       <h1>Monitoring Antrian Service</h1>
-      <!-- Tombol Cabang Aktif (Klik untuk ganti cabang TV) -->
-      <button class="site-pill" onclick="openSiteModal()" id="btnSitePill" title="Klik untuk mengganti cabang monitor TV ini">
-        Cabang: <b id="siteBadgeTxt">-</b> &#9662;
-      </button>
+      <!-- Badge Cabang Monitor TV Paten: JSL -->
+      <div class="site-pill" id="btnSitePill" style="cursor:default;" title="Cabang Monitor TV: JSL (Paten)">
+        Cabang: <b id="siteBadgeTxt">JSL</b>
+      </div>
     </div>
     
     <div class="controls">
       <div class="clk" id="clk">--:--:--</div>
-      <button class="btn-icon" onclick="testAudioAnnouncement()" id="btnTestVoice" title="Klik untuk menguji nada dan suara cewek pengumuman">🔔 Test Suara</button>
       <button class="btn-icon" onclick="toggleAudio()" id="btnAudio" title="Nyalakan/Matikan Audio">🔊 Suara</button>
       <button class="btn-icon" onclick="toggleFullscreen()" title="Layar Penuh (F11)">⛶ Layar Penuh</button>
     </div>
@@ -602,22 +601,15 @@ function getScriptUrl() {
   return DEFAULT_SCRIPT_URL;
 }
 
-/* ================= DETEKSI & KUNCI CABANG TV ================= */
-const urlParams = new URLSearchParams(window.location.search);
-const querySite = (urlParams.get("site") || urlParams.get("cabang") || "").toUpperCase();
+/* ================= KUNCI CABANG TV PATEN: JSL ================= */
+const DEFAULT_SITE = "JSL";
+let activeSite = "JSL";
+let sites = ["JSL"];
+let siteStalls = JSON.parse(localStorage.getItem("sq_site_stalls") || '{"JSL":2}');
 
-// Daftar cabang awal
-let sites = JSON.parse(localStorage.getItem("sq_sites") || '["CDG"]');
-let siteStalls = JSON.parse(localStorage.getItem("sq_site_stalls") || '{"CDG":2}');
-
-// Logika penentuan cabang TV:
-// 1. Dari URL parameter (?site=CDG / ?cabang=CDG)
-// 2. Dari localStorage 'sq_tv_site'
-// 3. Fallback ke cabang pertama di daftar cabang
-let activeSite = querySite || localStorage.getItem("sq_tv_site") || (sites[0] || "CDG").toUpperCase();
-
-// Kunci cabang ke storage
-localStorage.setItem("sq_tv_site", activeSite);
+// Kunci permanen ke storage browser TV
+localStorage.setItem("sq_tv_site", "JSL");
+localStorage.setItem("sq_active_site", "JSL");
 
 let audioEnabled = true;
 let isPulling = false;
@@ -631,44 +623,22 @@ const p2 = n => String(n).padStart(2, "0");
 const dur = s => s == null ? "-" : (s >= 3600 ? Math.floor(s / 3600) + ":" : "") + p2(Math.floor(s % 3600 / 60)) + ":" + p2(s % 60);
 const mins = (a, b) => a ? Math.max(0, Math.round(((b ? new Date(b) : new Date()) - new Date(a)) / 1e3)) : null;
 
-/* ================= SENSOR / MASKING SEBAGIAN NO PLAT MOTOR ================= */
-// Mengaburkan digit tengah plat nomor untuk privasi di layar TV (Contoh: B 12** XYZ, D 4** EF, AD 1* C)
+/* ================= NO PLAT MOTOR (TAMPIL LENGKAP TANPA SENSOR) ================= */
+// Menampilkan nomor plat motor secara utuh dan lengkap tanpa sensor
 function maskPlate(p) {
   if (!p) return "-";
-  const raw = String(p).trim().toUpperCase();
-  const m = raw.match(/^([A-Z]{1,2})\s*([0-9]{1,4})\s*([A-Z]{0,3})$/);
-  if (m) {
-    const prefix = m[1];
-    const num = m[2];
-    const suffix = m[3] ? " " + m[3] : "";
-    let maskedNum = num;
-    if (num.length >= 4) {
-      maskedNum = num.slice(0, 2) + "**";
-    } else if (num.length === 3) {
-      maskedNum = num.slice(0, 1) + "**";
-    } else if (num.length === 2) {
-      maskedNum = num.slice(0, 1) + "*";
-    } else {
-      maskedNum = "*";
-    }
-    return `${prefix} ${maskedNum}${suffix}`;
-  }
-  // Format jika nomor plat panjang atau non-standar
-  if (raw.length > 5) {
-    return raw.slice(0, 3) + "***" + raw.slice(-2);
-  }
-  return raw;
+  return String(p).trim().toUpperCase();
 }
 
 /* Local Records Cache: dimuat awal agar layar TV langsung tampil tanpa jeda */
 let records = JSON.parse(localStorage.getItem("sq_recs") || "[]");
 
-/* Update Tampilan Badge Cabang */
+/* Update Tampilan Badge Cabang (Paten JSL) */
 function updateSiteBadgeUI() {
   const b = $("#siteBadgeTxt");
-  if (b) b.textContent = activeSite || "PILIH";
+  if (b) b.textContent = "JSL";
   const f = $("#footerSiteName");
-  if (f) f.textContent = activeSite || "-";
+  if (f) f.textContent = "JSL";
 }
 
 /* Modal Pemilihan Cabang untuk Android TV */
@@ -676,7 +646,7 @@ function openSiteModal() {
   const c = $("#siteBtnContainer");
   if (!c) return;
   c.innerHTML = "";
-  const list = (sites && sites.length > 0) ? sites : [activeSite || "CDG"];
+  const list = ["JSL"];
   list.forEach(s => {
     const btn = document.createElement("button");
     btn.className = "site-choice-btn" + (s.toUpperCase() === activeSite.toUpperCase() ? " active" : "");
